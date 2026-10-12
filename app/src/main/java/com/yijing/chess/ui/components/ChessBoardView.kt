@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -38,6 +39,33 @@ fun ChessBoardView(
     onSquareClick: (BoardCoordinate) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 缓存 Paint 对象
+    val whitePiecePaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.WHITE
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+    val blackPiecePaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.BLACK
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+    val strokePaint = remember {
+        Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -46,7 +74,7 @@ fun ChessBoardView(
             .clip(RoundedCornerShape(8.dp))
             .background(Color(0xFF33271D))
             .padding(10.dp)
-            .pointerInput(isFlipped, board) {
+            .pointerInput(isFlipped) {
                 detectTapGestures { offset ->
                     val cellSize = size.width / 8f
                     var col = (offset.x / cellSize).toInt().coerceIn(0, 7)
@@ -103,27 +131,19 @@ fun ChessBoardView(
                 val rx = if (isFlipped) 7 - selectedCoord.x else selectedCoord.x
                 val ry = if (isFlipped) 7 - selectedCoord.y else selectedCoord.y
                 drawRect(
-                    color = Color(0x66FFD700),
+                    color = Color(0x88FFD700),
                     topLeft = Offset(rx * cellSize, ry * cellSize),
                     size = Size(cellSize, cellSize)
                 )
-                drawRect(
-                    color = Color(0xFFFFD700),
-                    topLeft = Offset(rx * cellSize, ry * cellSize),
-                    size = Size(cellSize, cellSize),
-                    style = Stroke(width = 3.dp.toPx())
-                )
             }
 
-            // 4. 绘制棋子
-            drawContext.canvas.nativeCanvas.apply {
-                val paint = Paint().apply {
-                    textSize = cellSize * 0.82f
-                    isAntiAlias = true
-                    textAlign = Paint.Align.CENTER
-                    typeface = android.graphics.Typeface.SERIF
-                }
+            // 4. 绘制棋子 (复用 Paint 对象)
+            val textSize = cellSize * 0.82f
+            whitePiecePaint.textSize = textSize
+            blackPiecePaint.textSize = textSize
+            strokePaint.textSize = textSize
 
+            drawContext.canvas.nativeCanvas.apply {
                 for (y in 0..7) {
                     for (x in 0..7) {
                         val piece = board[x, y] ?: continue
@@ -132,23 +152,13 @@ fun ChessBoardView(
                         val cx = rx * cellSize + cellSize / 2f
                         val cy = ry * cellSize + cellSize / 2f
 
-                        // 棋子立体对比颜色
-                        paint.color = if (piece.side == PlayerSide.WHITE) {
-                            android.graphics.Color.WHITE
-                        } else {
-                            android.graphics.Color.BLACK
-                        }
+                        val isWhite = piece.side == PlayerSide.WHITE
+                        val fillPaint = if (isWhite) whitePiecePaint else blackPiecePaint
+                        strokePaint.color = if (isWhite) android.graphics.Color.DKGRAY else android.graphics.Color.WHITE
 
-                        // 绘制描边增强黑白可读性
-                        val strokePaint = Paint(paint).apply {
-                            style = Paint.Style.STROKE
-                            strokeWidth = 3f
-                            color = if (piece.side == PlayerSide.WHITE) android.graphics.Color.DKGRAY else android.graphics.Color.WHITE
-                        }
-
-                        val textY = cy - (paint.descent() + paint.ascent()) / 2f
+                        val textY = cy - (fillPaint.descent() + fillPaint.ascent()) / 2f
                         drawText(piece.symbol, cx, textY, strokePaint)
-                        drawText(piece.symbol, cx, textY, paint)
+                        drawText(piece.symbol, cx, textY, fillPaint)
                     }
                 }
             }

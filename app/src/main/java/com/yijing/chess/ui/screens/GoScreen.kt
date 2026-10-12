@@ -1,10 +1,12 @@
 package com.yijing.chess.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,20 +18,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,30 +54,37 @@ import com.yijing.chess.go.GoAI
 import com.yijing.chess.go.GoBoard
 import com.yijing.chess.model.BoardCoordinate
 import com.yijing.chess.model.GameMode
+import com.yijing.chess.model.GameType
 import com.yijing.chess.model.MoveRecord
 import com.yijing.chess.model.MoveTreeNode
 import com.yijing.chess.model.PlayerSide
 import com.yijing.chess.parser.SgfParser
+import com.yijing.chess.storage.GameSaveManager
+import com.yijing.chess.storage.SavedGameState
 import com.yijing.chess.ui.components.GameControlBar
 import com.yijing.chess.ui.components.GoBoardView
-import com.yijing.chess.ui.theme.PrimaryGold
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GoScreen(
     initialMode: GameMode = GameMode.PVE,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onGameStateChanged: ((Boolean, (() -> Unit)?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
+    val saveManager = remember { GameSaveManager(context) }
 
     var boardSize by remember { mutableStateOf(19) }
     var mode by remember { mutableStateOf(initialMode) }
+    var aiDifficulty by remember { mutableStateOf(2) } // 1: 初级, 2: 中级, 3: 大师
     var board by remember { mutableStateOf(GoBoard(size = 19)) }
     var lastMove by remember { mutableStateOf<BoardCoordinate?>(null) }
     var isAiThinking by remember { mutableStateOf(false) }
+    var aiJob by remember { mutableStateOf<Job?>(null) }
 
     val boardHistory = remember { mutableStateListOf<GoBoard>() }
     val moveHistory = remember { mutableStateListOf<MoveRecord>() }
@@ -84,28 +95,95 @@ fun GoScreen(
     var isEraserMode by remember { mutableStateOf(false) }
     var exportDialogContent by remember { mutableStateOf<String?>(null) }
 
+    // 退出保存弹窗控制
+    var showExitSaveDialog by remember { mutableStateOf(false) }
+    var pendingExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var hasSavedGameAvailable by remember { mutableStateOf(saveManager.hasSavedGame(GameType.GO)) }
+
+    fun saveCurrentGame() {
+        val state = SavedGameState(
+            gameType = GameType.GO,
+            mode = mode,
+            difficulty = aiDifficulty,
+            boardState = board.toStateString(),
+            boardSize = boardSize,
+            turn = board.turn,
+            moveHistoryJson = saveManager.serializeMoveHistory(moveHistory.toList()),
+            blackPrisoners = board.blackPrisoners,
+            whitePrisoners = board.whitePrisoners
+        )
+        saveManager.saveGame(state)
+        hasSavedGameAvailable = true
+        Toast.makeText(context, "围棋对局已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    LaunchedEffect(moveHistory.size, mode) {
+        val active = mode != GameMode.EDITOR && moveHistory.isNotEmpty()
+        onGameStateChanged?.invoke(active) {
+            saveCurrentGame()
+        }
+    }
+
+    fun restoreSavedGame() {
+        val saved = saveManager.getSavedGame(GameType.GO) ?: return
+        aiJob?.cancel()
+        isAiThinking = false
+        boardSize = saved.boardSize
+        board = GoBoard.fromStateString(
+            size = saved.boardSize,
+            state = saved.boardState,
+            turn = saved.turn,
+            blackPrisoners = saved.blackPrisoners,
+            whitePrisoners = saved.whitePrisoners
+        )
+        mode = saved.mode
+        aiDifficulty = saved.difficulty
+        boardHistory.clear()
+        moveHistory.clear()
+        val historyList = saveManager.deserializeMoveHistory(saved.moveHistoryJson)
+        moveHistory.addAll(historyList)
+        lastMove = historyList.lastOrNull()?.to
+        Toast.makeText(context, "已恢复上次围棋对局 (${historyList.size}步)", Toast.LENGTH_SHORT).show()
+    }
+
+    fun attemptExit(action: () -> Unit) {
+        if (mode != GameMode.EDITOR && moveHistory.isNotEmpty()) {
+            pendingExitAction = action
+            showExitSaveDialog = true
+        } else {
+            action()
+        }
+    }
+
+    BackHandler {
+        attemptExit(onBack)
+    }
+
     fun triggerAiMoveIfNeeded() {
         if (mode == GameMode.PVE && board.turn == PlayerSide.WHITE) {
+            aiJob?.cancel()
             isAiThinking = true
-            coroutineScope.launch {
-                val bestMove = GoAI.findBestMove(board, PlayerSide.WHITE)
-                isAiThinking = false
-                if (bestMove != null) {
-                    boardHistory.add(board.copy())
-                    board.playMove(bestMove, PlayerSide.WHITE)
-                    lastMove = bestMove
-                    val record = MoveRecord(bestMove, bestMove, "白", "白[${bestMove.x},${bestMove.y}]")
-                    moveHistory.add(record)
-                    currentTreeNode = currentTreeNode.addVariation(record, "")
-                    board = board.copy()
-                } else {
-                    // AI 选择停着 (Pass)
-                    val ended = board.pass()
-                    Toast.makeText(context, "AI 决定停着 (Pass)", Toast.LENGTH_SHORT).show()
-                    board = board.copy()
-                    if (ended) {
-                        Toast.makeText(context, "双方连续停着，终局！", Toast.LENGTH_LONG).show()
+            aiJob = coroutineScope.launch {
+                try {
+                    val bestMove = GoAI.findBestMove(board.copy(), PlayerSide.WHITE, difficulty = aiDifficulty)
+                    if (bestMove != null) {
+                        boardHistory.add(board.copy())
+                        board.playMove(bestMove, PlayerSide.WHITE)
+                        lastMove = bestMove
+                        val record = MoveRecord(bestMove, bestMove, "白", "白[${bestMove.x},${bestMove.y}]")
+                        moveHistory.add(record)
+                        currentTreeNode = currentTreeNode.addVariation(record, "")
+                        board = board.copy()
+                    } else {
+                        val ended = board.pass()
+                        Toast.makeText(context, "AI 决定停着 (Pass)", Toast.LENGTH_SHORT).show()
+                        board = board.copy()
+                        if (ended) {
+                            Toast.makeText(context, "双方连续停着，终局！", Toast.LENGTH_LONG).show()
+                        }
                     }
+                } finally {
+                    isAiThinking = false
                 }
             }
         }
@@ -155,6 +233,8 @@ fun GoScreen(
 
     fun handleUndo() {
         if (boardHistory.isEmpty() || isAiThinking) return
+        aiJob?.cancel()
+        isAiThinking = false
         if (mode == GameMode.PVE) {
             if (boardHistory.size >= 2) {
                 board = boardHistory.removeAt(boardHistory.lastIndex)
@@ -174,6 +254,8 @@ fun GoScreen(
     }
 
     fun handleResetBoard(newSize: Int = boardSize) {
+        aiJob?.cancel()
+        isAiThinking = false
         boardSize = newSize
         board = GoBoard(size = newSize)
         boardHistory.clear()
@@ -188,15 +270,22 @@ fun GoScreen(
                     Column {
                         Text("围棋", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(
-                            text = "${boardSize}×${boardSize}路 · ${if (mode == GameMode.PVE) "人机对战" else if (mode == GameMode.PVP) "双人对弈" else "自由摆谱"}",
+                            text = "${boardSize}×${boardSize}路 · ${if (mode == GameMode.PVE) "人机对战 (${if (aiDifficulty == 1) "初级" else if (aiDifficulty == 2) "中级" else "大师"})" else if (mode == GameMode.PVP) "双人对弈" else "自由摆谱"}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { attemptExit(onBack) }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (hasSavedGameAvailable) {
+                        IconButton(onClick = ::restoreSavedGame) {
+                            Icon(Icons.Default.Restore, contentDescription = "恢复棋局", tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -216,7 +305,7 @@ fun GoScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -257,15 +346,52 @@ fun GoScreen(
                 }
             }
 
-            // 提子与轮次信息条
+            // AI 难度切换栏 (人机模式下展示，非人机时占位保持布局稳定不跳动)
+            if (mode == GameMode.PVE) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(34.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("AI难度:", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    FilterChip(
+                        selected = aiDifficulty == 1,
+                        onClick = { aiDifficulty = 1 },
+                        label = { Text("初级", fontSize = 10.sp) }
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    FilterChip(
+                        selected = aiDifficulty == 2,
+                        onClick = { aiDifficulty = 2 },
+                        label = { Text("中级", fontSize = 10.sp) }
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    FilterChip(
+                        selected = aiDifficulty == 3,
+                        onClick = { aiDifficulty = 3 },
+                        label = { Text("大师", fontSize = 10.sp) }
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.height(34.dp))
+            }
+
+            // 提子与轮次信息条 (定高 40dp，彻底杜绝折行与抖动跳动)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .height(40.dp)
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(12.dp)
@@ -274,37 +400,45 @@ fun GoScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (board.turn == PlayerSide.BLACK) "执黑走子" else "执白走子",
+                        text = if (board.turn == PlayerSide.BLACK) "黑方走子" else "白方走子",
                         fontWeight = FontWeight.Medium,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "提子: 黑 ${board.blackPrisoners} / 白 ${board.whitePrisoners}",
                         fontSize = 12.sp,
-                        color = Color.Gray
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "提子: 黑${board.blackPrisoners} 白${board.whitePrisoners}",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     if (isAiThinking) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("思考中...", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                        CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 2.dp)
+                        Text("思考中", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                     }
 
                     if (mode != GameMode.EDITOR) {
-                        ElevatedButton(
+                        OutlinedButton(
                             onClick = ::handlePass,
-                            enabled = !isAiThinking
+                            enabled = !isAiThinking,
+                            modifier = Modifier.height(30.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                         ) {
-                            Text("停着 (Pass)", fontSize = 11.sp)
+                            Text("停着(Pass)", fontSize = 10.sp)
                         }
                     }
                 }
             }
 
-            // 围棋棋盘
+            // 围棋棋盘 (稳定无跳跃)
             GoBoardView(
                 board = board,
                 lastMove = lastMove,
@@ -346,7 +480,7 @@ fun GoScreen(
                 onUndo = ::handleUndo,
                 onHint = {
                     coroutineScope.launch {
-                        val best = GoAI.findBestMove(board, board.turn)
+                        val best = GoAI.findBestMove(board.copy(), board.turn, difficulty = aiDifficulty)
                         if (best != null) {
                             Toast.makeText(context, "推荐落子：(${best.x + 1}, ${best.y + 1})", Toast.LENGTH_SHORT).show()
                             lastMove = best
@@ -366,6 +500,7 @@ fun GoScreen(
         }
     }
 
+    // 棋谱导出弹窗
     exportDialogContent?.let { sgfText ->
         AlertDialog(
             onDismissRequest = { exportDialogContent = null },
@@ -383,6 +518,39 @@ fun GoScreen(
             dismissButton = {
                 TextButton(onClick = { exportDialogContent = null }) {
                     Text("关闭")
+                }
+            }
+        )
+    }
+
+    // 退出保存确认弹窗
+    if (showExitSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitSaveDialog = false },
+            title = { Text("保存围棋棋局") },
+            text = { Text("当前对局尚未结束，是否保存当前棋局？下次可继续对弈。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    saveCurrentGame()
+                    showExitSaveDialog = false
+                    pendingExitAction?.invoke()
+                }) {
+                    Text("保存并退出")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        showExitSaveDialog = false
+                        saveManager.clearSavedGame(GameType.GO)
+                        hasSavedGameAvailable = false
+                        pendingExitAction?.invoke()
+                    }) {
+                        Text("不保存")
+                    }
+                    TextButton(onClick = { showExitSaveDialog = false }) {
+                        Text("取消")
+                    }
                 }
             }
         )

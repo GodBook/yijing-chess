@@ -10,11 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -41,6 +41,34 @@ fun XiangqiBoardView(
     onSquareClick: (BoardCoordinate) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 缓存 Paint 对象，避免每一帧渲染分配对象引起 GC 卡顿
+    val riverPaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.rgb(74, 55, 40)
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+    val redPiecePaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.rgb(184, 40, 40)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+    val blackPiecePaint = remember {
+        Paint().apply {
+            color = android.graphics.Color.rgb(30, 33, 36)
+            isFakeBoldText = true
+            isAntiAlias = true
+            textAlign = Paint.Align.CENTER
+            typeface = android.graphics.Typeface.SERIF
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -49,7 +77,7 @@ fun XiangqiBoardView(
             .clip(RoundedCornerShape(8.dp))
             .background(BoardWoodBg)
             .padding(12.dp)
-            .pointerInput(isFlipped, board) {
+            .pointerInput(isFlipped) {
                 detectTapGestures { offset ->
                     val cellW = size.width / 9f
                     val cellH = size.height / 10f
@@ -116,19 +144,13 @@ fun XiangqiBoardView(
             drawLine(BoardLineColor, getPos(5, 7), getPos(3, 9), strokeWidth = 2f)
 
             // 4. 绘制楚河汉界书法文字
+            riverPaint.textSize = cellH * 0.42f
             drawContext.canvas.nativeCanvas.apply {
-                val textPaint = Paint().apply {
-                    color = android.graphics.Color.rgb(74, 55, 40)
-                    textSize = cellH * 0.42f
-                    isAntiAlias = true
-                    textAlign = Paint.Align.CENTER
-                    typeface = android.graphics.Typeface.SERIF
-                }
                 val riverY = (getPos(0, 4).y + getPos(0, 5).y) / 2f + (cellH * 0.15f)
                 val text1 = if (isFlipped) "汉 界" else "楚 河"
                 val text2 = if (isFlipped) "楚 河" else "汉 界"
-                drawText(text1, startX + 2 * cellW, riverY, textPaint)
-                drawText(text2, startX + 6 * cellW, riverY, textPaint)
+                drawText(text1, startX + 2 * cellW, riverY, riverPaint)
+                drawText(text2, startX + 6 * cellW, riverY, riverPaint)
             }
 
             // 5. 绘制上一步标记 (走子轨迹高亮)
@@ -143,11 +165,14 @@ fun XiangqiBoardView(
 
             // 6. 绘制所有棋子
             val pieceRadius = cellW * 0.44f
+            redPiecePaint.textSize = pieceRadius * 1.2f
+            blackPiecePaint.textSize = pieceRadius * 1.2f
+
             for (y in 0..9) {
                 for (x in 0..8) {
                     val piece = board[x, y] ?: continue
                     val center = getPos(x, y)
-                    drawXiangqiPiece(center, pieceRadius, piece)
+                    drawXiangqiPiece(center, pieceRadius, piece, redPiecePaint, blackPiecePaint)
                 }
             }
 
@@ -188,7 +213,9 @@ fun XiangqiBoardView(
 private fun DrawScope.drawXiangqiPiece(
     center: Offset,
     radius: Float,
-    piece: XiangqiPiece
+    piece: XiangqiPiece,
+    redPaint: Paint,
+    blackPaint: Paint
 ) {
     // 阴影
     drawCircle(
@@ -221,20 +248,9 @@ private fun DrawScope.drawXiangqiPiece(
         style = Stroke(width = 1.2f)
     )
 
-    // 绘制棋子传统中文字样
+    // 绘制棋子传统中文字样 (复用 Paint 对象)
     drawContext.canvas.nativeCanvas.apply {
-        val paint = Paint().apply {
-            color = if (piece.side == PlayerSide.RED) {
-                android.graphics.Color.rgb(184, 40, 40)
-            } else {
-                android.graphics.Color.rgb(30, 33, 36)
-            }
-            textSize = radius * 1.2f
-            isFakeBoldText = true
-            isAntiAlias = true
-            textAlign = Paint.Align.CENTER
-            typeface = android.graphics.Typeface.SERIF
-        }
+        val paint = if (piece.side == PlayerSide.RED) redPaint else blackPaint
         val textY = center.y - (paint.descent() + paint.ascent()) / 2
         drawText(piece.displayName, center.x, textY, paint)
     }

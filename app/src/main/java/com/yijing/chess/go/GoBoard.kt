@@ -186,12 +186,55 @@ class GoBoard(
         return "$col$row"
     }
 
+    /**
+     * 导出为紧凑状态字符串 (用于对局保存)
+     */
+    fun toStateString(): String {
+        val sb = StringBuilder(size * size)
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                sb.append(when (grid[y][x]) {
+                    PlayerSide.BLACK -> 'B'
+                    PlayerSide.WHITE -> 'W'
+                    else -> '.'
+                })
+            }
+        }
+        return sb.toString()
+    }
+
     companion object {
         fun fromSgfCoord(sgf: String): BoardCoordinate? {
             if (sgf.length < 2) return null
             val x = sgf[0] - 'a'
             val y = sgf[1] - 'a'
             return BoardCoordinate(x, y)
+        }
+
+        fun fromStateString(
+            size: Int,
+            state: String,
+            turn: PlayerSide,
+            blackPrisoners: Int = 0,
+            whitePrisoners: Int = 0
+        ): GoBoard {
+            val board = GoBoard(size = size, turn = turn)
+            board.blackPrisoners = blackPrisoners
+            board.whitePrisoners = whitePrisoners
+            var idx = 0
+            for (y in 0 until size) {
+                for (x in 0 until size) {
+                    if (idx < state.length) {
+                        board[x, y] = when (state[idx]) {
+                            'B' -> PlayerSide.BLACK
+                            'W' -> PlayerSide.WHITE
+                            else -> null
+                        }
+                        idx++
+                    }
+                }
+            }
+            return board
         }
     }
 }

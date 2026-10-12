@@ -49,4 +49,12 @@ object PgnParser {
         sb.append(result)
         return sb.toString()
     }
+
+    fun exportChessPgn(rootNode: MoveTreeNode, event: String = "弈境国际象棋对局"): String {
+        return exportToPgn(rootNode, event = event)
+    }
+
+    fun exportXiangqiPgn(rootNode: MoveTreeNode, event: String = "弈境中国象棋对局"): String {
+        return exportToPgn(rootNode, whitePlayer = "红方", blackPlayer = "黑方", event = event)
+    }
 }

@@ -1,8 +1,6 @@
 package com.yijing.chess.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,27 +32,24 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yijing.chess.model.GameMode
 import com.yijing.chess.model.GameType
-import com.yijing.chess.ui.theme.BoardWoodBg
+import com.yijing.chess.storage.GameSaveManager
+import com.yijing.chess.ui.components.UpdateDialog
 import com.yijing.chess.ui.theme.PrimaryGold
 import com.yijing.chess.ui.theme.XiangqiRedColor
-
-import androidx.compose.material.icons.filled.CloudSync
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.yijing.chess.ui.components.UpdateDialog
 import com.yijing.chess.update.UpdateManager
 import kotlinx.coroutines.launch
 
@@ -64,6 +61,12 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
     val updateManager = remember { UpdateManager(context) }
     val updateStatus by updateManager.status.collectAsStateWithLifecycle()
+    val saveManager = remember { GameSaveManager(context) }
+
+    val xiangqiSaved = remember { saveManager.getSavedGame(GameType.XIANGQI) }
+    val goSaved = remember { saveManager.getSavedGame(GameType.GO) }
+    val chessSaved = remember { saveManager.getSavedGame(GameType.CHESS) }
+    val hasAnySaved = xiangqiSaved != null || goSaved != null || chessSaved != null
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -76,7 +79,7 @@ fun HomeScreen(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             // 标题徽标与文字
             Box(
@@ -127,46 +130,107 @@ fun HomeScreen(
                 Text("检查更新", fontSize = 12.sp)
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            // 未完成对局卡片 (如果有保存的对局)
+            if (hasAnySaved) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "未完成的对局",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (xiangqiSaved != null) {
+                                Button(
+                                    onClick = { onNavigateToGame(GameType.XIANGQI, xiangqiSaved.mode) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = XiangqiRedColor),
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("继续象棋", fontSize = 11.sp)
+                                }
+                            }
+                            if (goSaved != null) {
+                                Button(
+                                    onClick = { onNavigateToGame(GameType.GO, goSaved.mode) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2C3E50)),
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("继续围棋", fontSize = 11.sp)
+                                }
+                            }
+                            if (chessSaved != null) {
+                                Button(
+                                    onClick = { onNavigateToGame(GameType.CHESS, chessSaved.mode) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A3525)),
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("继续国际象棋", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             // 中国象棋卡片
             GameCard(
                 title = "中国象棋",
                 subtitle = "Xiangqi",
-                desc = "楚河汉界，万马奔腾。内置飞将、别马腿、象眼判定与多级启发式 AI 引擎。",
+                desc = "楚河汉界，万马奔腾。内置飞将、别马腿、象眼判定与分级启发式引擎。",
                 badge = "经典国粹",
                 badgeColor = XiangqiRedColor,
                 onModeSelected = { mode -> onNavigateToGame(GameType.XIANGQI, mode) }
             )
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // 围棋卡片
             GameCard(
                 title = "围 棋",
                 subtitle = "Go / Weiqi",
-                desc = "千古无同局。支持 19路大盘、13路中盘及 9路快棋，支持叫吃战术与 SGF 棋谱导出。",
+                desc = "千古无同局。支持 19路大盘、13路中盘及 9路快棋，双叫吃战术与 SGF 导出。",
                 badge = "黑白胜负",
                 badgeColor = Color(0xFF2C3E50),
                 onModeSelected = { mode -> onNavigateToGame(GameType.GO, mode) }
             )
 
-            Spacer(modifier = Modifier.height(18.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // 国际象棋卡片
             GameCard(
                 title = "国际象棋",
                 subtitle = "Chess",
-                desc = "王车纵横。支持王车易位、兵升变、吃过路兵，内置 Alpha-Beta 战术评估与 PGN 导出。",
+                desc = "王车纵横。支持王车易位、兵升变、吃过路兵，Alpha-Beta 战术评估与 PGN 导出。",
                 badge = "世界棋战",
                 badgeColor = Color(0xFF4A3525),
                 onModeSelected = { mode -> onNavigateToGame(GameType.CHESS, mode) }
             )
 
-            Spacer(modifier = Modifier.height(30.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "版本 v1.0.0 · 支持 Android 11+ · 纯净无广告",
+                text = "版本 v1.1.0 · 支持 Android 11+ · 可随时在下方栏切换棋类",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
             )

@@ -42,7 +42,7 @@ fun GoBoardView(
             .clip(RoundedCornerShape(8.dp))
             .background(BoardWoodBg)
             .padding(8.dp)
-            .pointerInput(board) {
+            .pointerInput(size) {
                 detectTapGestures { offset ->
                     val padding = this.size.width * 0.05f
                     val boardWidth = this.size.width - 2 * padding

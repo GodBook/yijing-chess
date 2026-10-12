@@ -1,8 +1,9 @@
 package com.yijing.chess.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,25 +15,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,36 +53,42 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yijing.chess.model.BoardCoordinate
 import com.yijing.chess.model.GameMode
+import com.yijing.chess.model.GameType
 import com.yijing.chess.model.MoveRecord
 import com.yijing.chess.model.MoveTreeNode
 import com.yijing.chess.model.PlayerSide
-import com.yijing.chess.parser.SgfParser
+import com.yijing.chess.parser.PgnParser
+import com.yijing.chess.storage.GameSaveManager
+import com.yijing.chess.storage.SavedGameState
 import com.yijing.chess.ui.components.GameControlBar
 import com.yijing.chess.ui.components.XiangqiBoardView
-import com.yijing.chess.ui.components.XiangqiPieceRack
-import com.yijing.chess.ui.theme.PrimaryGold
 import com.yijing.chess.ui.theme.XiangqiBlackColor
 import com.yijing.chess.ui.theme.XiangqiRedColor
 import com.yijing.chess.xiangqi.XiangqiAI
 import com.yijing.chess.xiangqi.XiangqiBoard
 import com.yijing.chess.xiangqi.XiangqiPiece
+import com.yijing.chess.xiangqi.XiangqiPieceType
 import com.yijing.chess.xiangqi.XiangqiRule
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun XiangqiScreen(
     initialMode: GameMode = GameMode.PVE,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onGameStateChanged: ((Boolean, (() -> Unit)?) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
+    val saveManager = remember { GameSaveManager(context) }
 
     var mode by remember { mutableStateOf(initialMode) }
     var aiDifficulty by remember { mutableStateOf(2) } // 1: 入门, 2: 进阶, 3: 大师
     var isFlipped by remember { mutableStateOf(false) }
     var isAiThinking by remember { mutableStateOf(false) }
+    var aiJob by remember { mutableStateOf<Job?>(null) }
 
     var board by remember { mutableStateOf(XiangqiBoard.initialBoard()) }
     var selectedCoord by remember { mutableStateOf<BoardCoordinate?>(null) }
@@ -102,6 +110,64 @@ fun XiangqiScreen(
     var exportDialogContent by remember { mutableStateOf<String?>(null) }
     var checkmateWinner by remember { mutableStateOf<PlayerSide?>(null) }
 
+    // 退出保存弹窗控制
+    var showExitSaveDialog by remember { mutableStateOf(false) }
+    var pendingExitAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var hasSavedGameAvailable by remember { mutableStateOf(saveManager.hasSavedGame(GameType.XIANGQI)) }
+
+    fun saveCurrentGame() {
+        val state = SavedGameState(
+            gameType = GameType.XIANGQI,
+            mode = mode,
+            difficulty = aiDifficulty,
+            boardState = board.toFen(),
+            turn = board.turn,
+            moveHistoryJson = saveManager.serializeMoveHistory(moveHistory.toList())
+        )
+        saveManager.saveGame(state)
+        hasSavedGameAvailable = true
+        Toast.makeText(context, "象棋对局已保存", Toast.LENGTH_SHORT).show()
+    }
+
+    androidx.compose.runtime.LaunchedEffect(moveHistory.size, checkmateWinner, mode) {
+        val active = mode != GameMode.EDITOR && moveHistory.isNotEmpty() && checkmateWinner == null
+        onGameStateChanged?.invoke(active) {
+            saveCurrentGame()
+        }
+    }
+
+    fun restoreSavedGame() {
+        val saved = saveManager.getSavedGame(GameType.XIANGQI) ?: return
+        aiJob?.cancel()
+        isAiThinking = false
+        board = XiangqiBoard.fromFen(saved.boardState)
+        mode = saved.mode
+        aiDifficulty = saved.difficulty
+        boardHistory.clear()
+        moveHistory.clear()
+        val historyList = saveManager.deserializeMoveHistory(saved.moveHistoryJson)
+        moveHistory.addAll(historyList)
+        lastFrom = historyList.lastOrNull()?.from
+        lastTo = historyList.lastOrNull()?.to
+        selectedCoord = null
+        legalTargets = emptyList()
+        checkmateWinner = null
+        Toast.makeText(context, "已恢复上次象棋对局 (${historyList.size}步)", Toast.LENGTH_SHORT).show()
+    }
+
+    fun attemptExit(action: () -> Unit) {
+        if (mode != GameMode.EDITOR && moveHistory.isNotEmpty() && checkmateWinner == null) {
+            pendingExitAction = action
+            showExitSaveDialog = true
+        } else {
+            action()
+        }
+    }
+
+    BackHandler {
+        attemptExit(onBack)
+    }
+
     fun refreshLegalTargets() {
         val sel = selectedCoord
         if (sel == null) {
@@ -115,31 +181,35 @@ fun XiangqiScreen(
     // AI 自动走子触发
     fun triggerAiMoveIfNeeded() {
         if (mode == GameMode.PVE && board.turn == PlayerSide.BLACK && checkmateWinner == null) {
+            aiJob?.cancel()
             isAiThinking = true
-            coroutineScope.launch {
-                val decision = XiangqiAI.findBestMove(board, PlayerSide.BLACK, depth = aiDifficulty + 1)
-                isAiThinking = false
-                val bestMove = decision.move
-                if (bestMove != null) {
-                    boardHistory.add(board.copy())
-                    val moved = board[bestMove.from]!!
-                    board[bestMove.to] = moved
-                    board[bestMove.from] = null
-                    board.turn = PlayerSide.RED
+            aiJob = coroutineScope.launch {
+                try {
+                    val decision = XiangqiAI.findBestMove(board.copy(), PlayerSide.BLACK, difficulty = aiDifficulty)
+                    val bestMove = decision.move
+                    if (bestMove != null) {
+                        boardHistory.add(board.copy())
+                        val moved = board[bestMove.from]!!
+                        board[bestMove.to] = moved
+                        board[bestMove.from] = null
+                        board.turn = PlayerSide.RED
 
-                    lastFrom = bestMove.from
-                    lastTo = bestMove.to
-                    moveHistory.add(bestMove)
-                    currentTreeNode = currentTreeNode.addVariation(bestMove, board.toFen())
+                        lastFrom = bestMove.from
+                        lastTo = bestMove.to
+                        moveHistory.add(bestMove)
+                        currentTreeNode = currentTreeNode.addVariation(bestMove, board.toFen())
 
-                    // 检查红方是否被将死
-                    val nextLegals = XiangqiRule.getLegalMoves(board, PlayerSide.RED)
-                    if (nextLegals.isEmpty()) {
-                        checkmateWinner = if (XiangqiRule.isKingInCheck(board, PlayerSide.RED)) PlayerSide.BLACK else null
+                        // 检查红方是否被将死
+                        val nextLegals = XiangqiRule.getLegalMoves(board, PlayerSide.RED)
+                        if (nextLegals.isEmpty()) {
+                            checkmateWinner = if (XiangqiRule.isKingInCheck(board, PlayerSide.RED)) PlayerSide.BLACK else null
+                        }
+                        board = board.copy()
+                    } else {
+                        checkmateWinner = PlayerSide.RED
                     }
-                    board = board.copy()
-                } else {
-                    checkmateWinner = PlayerSide.RED
+                } finally {
+                    isAiThinking = false
                 }
             }
         }
@@ -149,7 +219,6 @@ fun XiangqiScreen(
         if (isAiThinking) return
 
         if (mode == GameMode.EDITOR) {
-            // 摆谱模式：点击放置或移除
             if (isEraserMode) {
                 board[coord] = null
             } else if (editorPiece != null) {
@@ -159,7 +228,6 @@ fun XiangqiScreen(
             return
         }
 
-        // 正常对弈模式
         val pieceAtCoord = board[coord]
         if (selectedCoord == null) {
             if (pieceAtCoord != null && pieceAtCoord.side == board.turn) {
@@ -172,11 +240,9 @@ fun XiangqiScreen(
                 selectedCoord = null
                 refreshLegalTargets()
             } else if (pieceAtCoord != null && pieceAtCoord.side == board.turn) {
-                // 切换选中的己方棋子
                 selectedCoord = coord
                 refreshLegalTargets()
             } else if (legalTargets.contains(coord)) {
-                // 执行合法走步
                 val legalMoves = XiangqiRule.getLegalMoves(board, board.turn)
                 val targetMove = legalMoves.find { it.from == from && it.to == coord }
                 if (targetMove != null) {
@@ -194,7 +260,6 @@ fun XiangqiScreen(
                     moveHistory.add(targetMove)
                     currentTreeNode = currentTreeNode.addVariation(targetMove, board.toFen())
 
-                    // 检查下一方是否被将死
                     val nextLegals = XiangqiRule.getLegalMoves(board, board.turn)
                     if (nextLegals.isEmpty()) {
                         checkmateWinner = if (XiangqiRule.isKingInCheck(board, board.turn)) board.turn.xiangqiOpposite else null
@@ -212,8 +277,9 @@ fun XiangqiScreen(
 
     fun handleUndo() {
         if (boardHistory.isEmpty() || isAiThinking) return
+        aiJob?.cancel()
+        isAiThinking = false
         if (mode == GameMode.PVE) {
-            // 人机模式一次撤销 2 步 (己方+AI)
             if (boardHistory.size >= 2) {
                 board = boardHistory.removeAt(boardHistory.lastIndex)
                 board = boardHistory.removeAt(boardHistory.lastIndex)
@@ -237,7 +303,7 @@ fun XiangqiScreen(
     fun handleHint() {
         if (isAiThinking) return
         coroutineScope.launch {
-            val decision = XiangqiAI.findBestMove(board, board.turn, depth = 3)
+            val decision = XiangqiAI.findBestMove(board.copy(), board.turn, difficulty = aiDifficulty)
             val move = decision.move
             if (move != null) {
                 Toast.makeText(context, "推荐招法：${move.notation}", Toast.LENGTH_SHORT).show()
@@ -255,7 +321,7 @@ fun XiangqiScreen(
                         Text("中国象棋", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         Text(
                             text = when (mode) {
-                                GameMode.PVE -> "人机对决 (${if (aiDifficulty == 1) "入门" else if (aiDifficulty == 2) "进阶" else "大师"})"
+                                GameMode.PVE -> "人机对决 (${if (aiDifficulty == 1) "初级" else if (aiDifficulty == 2) "中级" else "大师"})"
                                 GameMode.PVP -> "双人同屏对弈"
                                 GameMode.EDITOR -> "自由排局摆谱"
                                 else -> ""
@@ -266,8 +332,15 @@ fun XiangqiScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { attemptExit(onBack) }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (hasSavedGameAvailable) {
+                        IconButton(onClick = ::restoreSavedGame) {
+                            Icon(Icons.Default.Restore, contentDescription = "恢复棋局", tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -287,7 +360,7 @@ fun XiangqiScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -330,15 +403,19 @@ fun XiangqiScreen(
                 }
             }
 
-            // 状态指示条
+            // 状态指示条 (定高 38dp，布局绝不跳动)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .height(38.dp)
+                    .padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(10.dp)
@@ -349,24 +426,26 @@ fun XiangqiScreen(
                     Text(
                         text = if (board.turn == PlayerSide.RED) "轮到红方走子" else "轮到黑方走子",
                         fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     if (XiangqiRule.isKingInCheck(board, board.turn)) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("【将军!】", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("【将军!】", color = Color.Red, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
                     }
                 }
 
                 if (isAiThinking) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("AI 思考中...", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("思考中...", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, maxLines = 1)
                     }
                 }
             }
 
-            // 棋盘视图
+            // 棋盘视图 (完全消除中间突变闪烁)
             XiangqiBoardView(
                 board = board,
                 selectedCoord = selectedCoord,
@@ -377,7 +456,7 @@ fun XiangqiScreen(
                 onSquareClick = ::handleSquareClick
             )
 
-            // 摆谱托盘或走步历史
+            // 摆谱托盘
             if (mode == GameMode.EDITOR) {
                 XiangqiPieceRack(
                     selectedPiece = editorPiece,
@@ -389,49 +468,17 @@ fun XiangqiScreen(
                         selectedCoord = null
                         refreshLegalTargets()
                     },
-                    onResetBoard = {
+                    onResetInitial = {
                         board = XiangqiBoard.initialBoard()
                         selectedCoord = null
                         refreshLegalTargets()
-                    },
-                    onStartBattle = {
-                        mode = GameMode.PVE
-                        triggerAiMoveIfNeeded()
-                        Toast.makeText(context, "已从当前排局开启人机对战", Toast.LENGTH_SHORT).show()
                     }
                 )
-            } else {
-                // 走步历史列表
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (moveHistory.isEmpty()) {
-                        Text("暂无走步记录", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
-                    } else {
-                        moveHistory.forEachIndexed { index, m ->
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier.padding(horizontal = 2.dp)
-                            ) {
-                                Text(
-                                    text = "${index + 1}. ${m.notation}",
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // 底部控制栏
+            // 底部控制操作栏
             GameControlBar(
                 canUndo = boardHistory.isNotEmpty() && !isAiThinking,
                 isEditorMode = mode == GameMode.EDITOR,
@@ -440,8 +487,12 @@ fun XiangqiScreen(
                 onFlip = { isFlipped = !isFlipped },
                 onToggleEditor = {
                     mode = if (mode == GameMode.EDITOR) GameMode.PVE else GameMode.EDITOR
+                    selectedCoord = null
+                    refreshLegalTargets()
                 },
                 onRestart = {
+                    aiJob?.cancel()
+                    isAiThinking = false
                     board = XiangqiBoard.initialBoard()
                     boardHistory.clear()
                     moveHistory.clear()
@@ -452,29 +503,26 @@ fun XiangqiScreen(
                     checkmateWinner = null
                 },
                 onExport = {
-                    val fen = board.toFen()
-                    val sgf = SgfParser.exportToSgf(rootTreeNode.value, "中国象棋对局", 9)
-                    exportDialogContent = "【FEN 局面串】\n$fen\n\n【SGF 棋谱】\n$sgf"
+                    val pgn = PgnParser.exportXiangqiPgn(rootTreeNode.value, "弈境中国象棋对局")
+                    exportDialogContent = pgn
                 }
             )
         }
     }
 
-    // 棋谱导出对话框
-    exportDialogContent?.let { contentStr ->
+    // 棋谱导出弹窗
+    exportDialogContent?.let { pgnText ->
         AlertDialog(
             onDismissRequest = { exportDialogContent = null },
-            title = { Text("棋谱与局面导出") },
-            text = {
-                Text(contentStr, fontSize = 12.sp)
-            },
+            title = { Text("象棋 PGN 棋谱导出") },
+            text = { Text(pgnText, fontSize = 12.sp) },
             confirmButton = {
                 TextButton(onClick = {
-                    clipboardManager.setText(AnnotatedString(contentStr))
-                    Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                    clipboardManager.setText(AnnotatedString(pgnText))
+                    Toast.makeText(context, "已复制棋谱到剪贴板", Toast.LENGTH_SHORT).show()
                     exportDialogContent = null
                 }) {
-                    Text("复制全部")
+                    Text("复制")
                 }
             },
             dismissButton = {
@@ -485,19 +533,172 @@ fun XiangqiScreen(
         )
     }
 
-    // 终局胜负对话框
+    // 将死胜负提示弹窗
     checkmateWinner?.let { winner ->
         AlertDialog(
             onDismissRequest = { checkmateWinner = null },
             title = { Text("对局结束") },
-            text = {
-                Text("恭喜 ${winner.displayName} 获胜！", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            },
+            text = { Text(if (winner == PlayerSide.RED) "红方胜！黑方已被将死。" else "黑方胜！红方已被将死。") },
             confirmButton = {
+                TextButton(onClick = {
+                    saveManager.clearSavedGame(GameType.XIANGQI)
+                    hasSavedGameAvailable = false
+                    board = XiangqiBoard.initialBoard()
+                    boardHistory.clear()
+                    moveHistory.clear()
+                    selectedCoord = null
+                    legalTargets = emptyList()
+                    lastFrom = null
+                    lastTo = null
+                    checkmateWinner = null
+                }) {
+                    Text("再来一局")
+                }
+            },
+            dismissButton = {
                 TextButton(onClick = { checkmateWinner = null }) {
-                    Text("继续研讨")
+                    Text("关闭")
                 }
             }
+        )
+    }
+
+    // 退出保存确认弹窗
+    if (showExitSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitSaveDialog = false },
+            title = { Text("保存象棋棋局") },
+            text = { Text("当前对局尚未结束，是否保存当前棋局？下次可继续对弈。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    saveCurrentGame()
+                    showExitSaveDialog = false
+                    pendingExitAction?.invoke()
+                }) {
+                    Text("保存并退出")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        showExitSaveDialog = false
+                        saveManager.clearSavedGame(GameType.XIANGQI)
+                        hasSavedGameAvailable = false
+                        pendingExitAction?.invoke()
+                    }) {
+                        Text("不保存")
+                    }
+                    TextButton(onClick = { showExitSaveDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun XiangqiPieceRack(
+    selectedPiece: XiangqiPiece?,
+    isEraserMode: Boolean,
+    onSelectPiece: (XiangqiPiece) -> Unit,
+    onToggleEraser: () -> Unit,
+    onClearBoard: () -> Unit,
+    onResetInitial: () -> Unit
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text("红方棋子：", fontSize = 12.sp, color = XiangqiRedColor, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                listOf(
+                    XiangqiPieceType.ROOK, XiangqiPieceType.KNIGHT, XiangqiPieceType.CANNON,
+                    XiangqiPieceType.BISHOP, XiangqiPieceType.ADVISOR, XiangqiPieceType.KING, XiangqiPieceType.PAWN
+                ).forEach { type ->
+                    val piece = XiangqiPiece(PlayerSide.RED, type)
+                    PieceRackItem(
+                        piece = piece,
+                        isSelected = !isEraserMode && selectedPiece?.type == type && selectedPiece.side == PlayerSide.RED,
+                        onClick = { onSelectPiece(piece) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text("黑方棋子：", fontSize = 12.sp, color = XiangqiBlackColor, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceAround
+            ) {
+                listOf(
+                    XiangqiPieceType.ROOK, XiangqiPieceType.KNIGHT, XiangqiPieceType.CANNON,
+                    XiangqiPieceType.BISHOP, XiangqiPieceType.ADVISOR, XiangqiPieceType.KING, XiangqiPieceType.PAWN
+                ).forEach { type ->
+                    val piece = XiangqiPiece(PlayerSide.BLACK, type)
+                    PieceRackItem(
+                        piece = piece,
+                        isSelected = !isEraserMode && selectedPiece?.type == type && selectedPiece.side == PlayerSide.BLACK,
+                        onClick = { onSelectPiece(piece) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = isEraserMode,
+                    onClick = onToggleEraser,
+                    label = { Text("橡皮擦 (移除)") }
+                )
+                OutlinedButton(
+                    onClick = onClearBoard,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("清空棋盘", fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onResetInitial,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("初始布局", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PieceRackItem(
+    piece: XiangqiPiece,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val borderColor = if (isSelected) Color(0xFFFFD700) else Color.Transparent
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.LightGray.copy(alpha = 0.3f))
+            .clickable(onClick = onClick)
+    ) {
+        Text(
+            text = piece.displayName,
+            color = if (piece.side == PlayerSide.RED) XiangqiRedColor else XiangqiBlackColor,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
         )
     }
 }
