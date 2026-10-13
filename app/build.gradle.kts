@@ -11,8 +11,8 @@ android {
         applicationId = "com.yijing.chess"
         minSdk = 30
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 5
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -44,7 +44,9 @@ android {
             signingConfig = signingConfigs.getByName("shared")
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("shared")
         }
     }
@@ -61,24 +63,22 @@ android {
 }
 
 tasks.register<JavaExec>("verifyChessRules") {
-    description = "Runs the rule verification unit tests via JUnitCore"
+    description = "Runs every regression test and writes JUnit XML reports"
     group = "verification"
     dependsOn("compileDebugKotlin", "compileDebugUnitTestKotlin")
-
-    mainClass.set("org.junit.runner.JUnitCore")
-    val testClassesDir = layout.buildDirectory.dir("intermediates/built_in_kotlinc/debugUnitTest/compileDebugUnitTestKotlin/classes")
-    val appClassesDir = layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")
-
-    classpath = files(
-        testClassesDir,
-        appClassesDir,
-        configurations.getByName("debugUnitTestRuntimeClasspath")
-    )
-    args = listOf(
-        "com.yijing.chess.XiangqiRuleTest",
-        "com.yijing.chess.GoBoardTest",
-        "com.yijing.chess.ChessRuleTest"
-    )
+    mainClass.set("com.yijing.chess.RegressionRunner")
+    val testClasses = layout.buildDirectory.dir("intermediates/built_in_kotlinc/debugUnitTest/compileDebugUnitTestKotlin/classes")
+    val appClasses = layout.buildDirectory.dir("intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes")
+    classpath = files(testClasses, appClasses, configurations.getByName("debugUnitTestRuntimeClasspath"))
+    jvmArgs("-Dfile.encoding=UTF-8")
+    doFirst {
+        val root = testClasses.get().asFile
+        val classes = fileTree(root).matching { include("**/*Test.class") }.files
+            .filter { !it.name.contains('$') }
+            .map { it.relativeTo(root).path.removeSuffix(".class").replace(File.separatorChar, '.') }.sorted()
+        require(classes.isNotEmpty()) { "No regression tests discovered" }
+        args = listOf(layout.buildDirectory.dir("test-results/verifyChessRules").get().asFile.path) + classes
+    }
 }
 
 dependencies {

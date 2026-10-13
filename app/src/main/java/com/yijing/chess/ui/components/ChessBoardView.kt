@@ -37,9 +37,11 @@ fun ChessBoardView(
     lastTo: BoardCoordinate?,
     isFlipped: Boolean = false,
     onSquareClick: (BoardCoordinate) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    options: BoardOptions = BoardOptions()
 ) {
     // 缓存 Paint 对象
+    val coordinatePaint = remember { Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER } }
     val whitePiecePaint = remember {
         Paint().apply {
             color = android.graphics.Color.WHITE
@@ -76,14 +78,8 @@ fun ChessBoardView(
             .padding(10.dp)
             .pointerInput(isFlipped) {
                 detectTapGestures { offset ->
-                    val cellSize = size.width / 8f
-                    var col = (offset.x / cellSize).toInt().coerceIn(0, 7)
-                    var row = (offset.y / cellSize).toInt().coerceIn(0, 7)
-                    if (isFlipped) {
-                        col = 7 - col
-                        row = 7 - row
-                    }
-                    onSquareClick(BoardCoordinate(col, row))
+                    BoardGeometry(com.yijing.chess.model.GameType.CHESS, size.width.toFloat(), size.height.toFloat(), flipped = isFlipped)
+                        .hit(offset.x, offset.y)?.let(onSquareClick)
                 }
             }
     ) {
@@ -96,7 +92,7 @@ fun ChessBoardView(
                     val rx = if (isFlipped) 7 - x else x
                     val ry = if (isFlipped) 7 - y else y
                     val isLight = (x + y) % 2 == 0
-                    val squareColor = if (isLight) BoardWoodLight else BoardWoodDark
+                    val squareColor = if (options.highContrast) { if (isLight) Color(0xFFFFF8E1) else Color(0xFF86664A) } else if (isLight) BoardWoodLight else BoardWoodDark
 
                     drawRect(
                         color = squareColor,
@@ -186,6 +182,10 @@ fun ChessBoardView(
                     )
                 }
             }
+            drawBoardOverlays(BoardGeometry(com.yijing.chess.model.GameType.CHESS, size.width, size.height, flipped = isFlipped), options, coordinatePaint)
         }
+        BoardAccessibility(com.yijing.chess.model.GameType.CHESS, 8, isFlipped, selectedCoord, legalTargets,
+            { coord -> board[coord]?.let { "${it.side.displayName}${when (it.type) { com.yijing.chess.chess.ChessPieceType.KING -> "王"; com.yijing.chess.chess.ChessPieceType.QUEEN -> "后"; com.yijing.chess.chess.ChessPieceType.ROOK -> "车"; com.yijing.chess.chess.ChessPieceType.BISHOP -> "象"; com.yijing.chess.chess.ChessPieceType.KNIGHT -> "马"; else -> "兵" }}" } ?: "空格" },
+            onSquareClick, Modifier.matchParentSize())
     }
 }

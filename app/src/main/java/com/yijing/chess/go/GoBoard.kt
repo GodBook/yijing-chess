@@ -90,6 +90,7 @@ class GoBoard(
      * 判断在 (x,y) 处落子是否合法
      */
     fun isMoveLegal(coord: BoardCoordinate, side: PlayerSide): Boolean {
+        if (coord.x !in 0 until size || coord.y !in 0 until size || side == PlayerSide.RED) return false
         if (get(coord) != null) return false // 已有子
 
         // 劫争禁着判定
@@ -155,8 +156,8 @@ class GoBoard(
 
         // 判断是否形成单子打劫局面
         if (capturedStones.size == 1) {
-            val (_, myLiberties) = getGroupAndLiberties(coord)
-            if (myLiberties.size == 1) {
+            val (myGroup, myLiberties) = getGroupAndLiberties(coord)
+            if (myGroup.size == 1 && myLiberties.size == 1) {
                 lastCapturedCoord = capturedStones.first()
             } else {
                 lastCapturedCoord = null
@@ -216,9 +217,15 @@ class GoBoard(
             state: String,
             turn: PlayerSide,
             blackPrisoners: Int = 0,
-            whitePrisoners: Int = 0
+            whitePrisoners: Int = 0,
+            lastCapturedCoord: BoardCoordinate? = null,
+            consecutivePasses: Int = 0
         ): GoBoard {
-            val board = GoBoard(size = size, turn = turn)
+            require(size in listOf(9, 13, 19)) { "围棋仅支持 9、13、19 路" }
+            require(state.length == size * size && state.all { it in "BW." }) { "围棋局面数据不完整或含未知棋子" }
+            require(turn != PlayerSide.RED && consecutivePasses >= 0 && blackPrisoners >= 0 && whitePrisoners >= 0) { "围棋规则状态无效" }
+            require(lastCapturedCoord == null || (lastCapturedCoord.x in 0 until size && lastCapturedCoord.y in 0 until size)) { "围棋劫点越界" }
+            val board = GoBoard(size = size, turn = turn, lastCapturedCoord = lastCapturedCoord, consecutivePasses = consecutivePasses)
             board.blackPrisoners = blackPrisoners
             board.whitePrisoners = whitePrisoners
             var idx = 0

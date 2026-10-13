@@ -39,7 +39,8 @@ fun XiangqiBoardView(
     lastTo: BoardCoordinate?,
     isFlipped: Boolean = false,
     onSquareClick: (BoardCoordinate) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    options: BoardOptions = BoardOptions()
 ) {
     // 缓存 Paint 对象，避免每一帧渲染分配对象引起 GC 卡顿
     val riverPaint = remember {
@@ -79,28 +80,19 @@ fun XiangqiBoardView(
             .padding(12.dp)
             .pointerInput(isFlipped) {
                 detectTapGestures { offset ->
-                    val cellW = size.width / 9f
-                    val cellH = size.height / 10f
-                    var col = (offset.x / cellW).toInt().coerceIn(0, 8)
-                    var row = (offset.y / cellH).toInt().coerceIn(0, 9)
-                    if (isFlipped) {
-                        col = 8 - col
-                        row = 9 - row
-                    }
-                    onSquareClick(BoardCoordinate(col, row))
+                    BoardGeometry(com.yijing.chess.model.GameType.XIANGQI, size.width.toFloat(), size.height.toFloat(), flipped = isFlipped)
+                        .hit(offset.x, offset.y)?.let(onSquareClick)
                 }
             }
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
-            val cellW = size.width / 8.8f
-            val cellH = size.height / 9.8f
+            val geometry = BoardGeometry(com.yijing.chess.model.GameType.XIANGQI, size.width, size.height, flipped = isFlipped)
+            val cellW = geometry.stepX
+            val cellH = geometry.stepY
             val startX = size.width * 0.055f
-            val startY = size.height * 0.05f
 
             fun getPos(x: Int, y: Int): Offset {
-                val rx = if (isFlipped) 8 - x else x
-                val ry = if (isFlipped) 9 - y else y
-                return Offset(startX + rx * cellW, startY + ry * cellH)
+                return geometry.center(BoardCoordinate(x, y)).let { Offset(it.x, it.y) }
             }
 
             // 1. 绘制横线
@@ -206,7 +198,10 @@ fun XiangqiBoardView(
                     )
                 }
             }
+            drawBoardOverlays(geometry, options, riverPaint)
         }
+        BoardAccessibility(com.yijing.chess.model.GameType.XIANGQI, 9, isFlipped, selectedCoord, legalTargets,
+            { coord -> board[coord]?.let { "${it.side.displayName}${it.displayName}" } ?: "空点" }, onSquareClick, Modifier.matchParentSize())
     }
 }
 

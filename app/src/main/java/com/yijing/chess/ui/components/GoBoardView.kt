@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -30,9 +31,12 @@ fun GoBoardView(
     board: GoBoard,
     lastMove: BoardCoordinate?,
     onIntersectionClick: (BoardCoordinate) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFlipped: Boolean = false,
+    options: BoardOptions = BoardOptions()
 ) {
     val size = board.size
+    val coordinatePaint = remember { android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { textAlign = android.graphics.Paint.Align.CENTER } }
 
     Box(
         modifier = modifier
@@ -42,24 +46,19 @@ fun GoBoardView(
             .clip(RoundedCornerShape(8.dp))
             .background(BoardWoodBg)
             .padding(8.dp)
-            .pointerInput(size) {
+            .pointerInput(size, isFlipped) {
                 detectTapGestures { offset ->
-                    val padding = this.size.width * 0.05f
-                    val boardWidth = this.size.width - 2 * padding
-                    val cellSize = boardWidth / (size - 1)
-                    val x = kotlin.math.round((offset.x - padding) / cellSize).toInt().coerceIn(0, size - 1)
-                    val y = kotlin.math.round((offset.y - padding) / cellSize).toInt().coerceIn(0, size - 1)
-                    onIntersectionClick(BoardCoordinate(x, y))
+                    BoardGeometry(com.yijing.chess.model.GameType.GO, this.size.width.toFloat(), this.size.height.toFloat(), size, isFlipped)
+                        .hit(offset.x, offset.y)?.let(onIntersectionClick)
                 }
             }
     ) {
         Canvas(modifier = Modifier.matchParentSize()) {
-            val padding = this.size.width * 0.05f
-            val boardWidth = this.size.width - 2 * padding
-            val cellSize = boardWidth / (size - 1)
+            val geometry = BoardGeometry(com.yijing.chess.model.GameType.GO, this.size.width, this.size.height, size, isFlipped)
+            val cellSize = geometry.stepX
 
             fun getPos(x: Int, y: Int): Offset {
-                return Offset(padding + x * cellSize, padding + y * cellSize)
+                return geometry.center(BoardCoordinate(x, y)).let { Offset(it.x, it.y) }
             }
 
             // 1. 绘制网格线
@@ -130,7 +129,10 @@ fun GoBoardView(
                     )
                 }
             }
+            drawBoardOverlays(geometry, options, coordinatePaint)
         }
+        BoardAccessibility(com.yijing.chess.model.GameType.GO, size, isFlipped, options.tentative, listOfNotNull(options.hintTo),
+            { coord -> board[coord]?.displayName?.plus("棋子") ?: "空交叉点" }, onIntersectionClick, Modifier.matchParentSize())
     }
 }
 

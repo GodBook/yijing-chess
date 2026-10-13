@@ -1,48 +1,80 @@
-name: Build & Release Android APK
+name: Verify and prepare Android release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
+    paths-ignore: ['docs/**', 'README.md']
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
-
-      - name: Grant execute permission for gradlew
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify, lint and build
         run: |
-          sed -i '/org.gradle.java.home/d' gradle.properties
           chmod +x gradlew
-
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK Artifact
+          ./gradlew :app:verifyChessRules :app:lintRelease :app:assembleRelease :app:assembleDebugAndroidTest --no-daemon
+      - name: Validate exported notation with independent readers
+        run: |
+          python -m pip install python-chess==1.999 chess==1.11.2 sgfmill==1.1.1
+          python scripts/verify-notation.py
+      - name: Package verified release
+        run: |
+          version=$(jq -r '.elements[0].versionName' app/build/outputs/apk/release/output-metadata.json)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+          fi
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/release/app-release.apk "release-artifacts/yijing-v$version.apk"
+          cd release-artifacts
+          sha256sum "yijing-v$version.apk" > SHA256SUMS
+      - name: Upload release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: yijing-chess-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: yijing-release-candidate
+          path: release-artifacts/
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-reports
+          path: |
+            app/build/test-results/verifyChessRules/
+            app/build/reports/lint-results-release.*
+          if-no-files-found: warn
 
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
+  prepare-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: yijing-release-candidate
+          path: release-artifacts
+      - name: Prepare draft for final device verification
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/app-debug.apk
-          name: Release ${{ github.ref_name }}
-          draft: false
+          name: 弈境 ${{ github.ref_name }}
+          draft: true
           prerelease: false
-          generate_release_notes: true
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: release-artifacts/*
