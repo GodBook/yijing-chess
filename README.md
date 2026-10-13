@@ -62,11 +62,11 @@ node scripts/qa-apk-server.mjs app/build/outputs/apk/release/app-release.apk 371
 
 ```bash
 adb reverse tcp:37123 tcp:37123
-./gradlew :app:connectedDebugAndroidTest
+pwsh -File scripts/RunDeviceTests.ps1
 adb reverse --remove tcp:37123
 ```
 
-该服务仅用于验证系统 DownloadManager；HTTP 回环访问仅在 Debug 中开放，正式应用更新使用 HTTPS。测试使用独立存储名称与明确创建的 QA 棋局，不清空用户棋局库。测试完成后停止服务。
+该服务仅用于验证系统 DownloadManager；HTTP 回环访问仅在 Debug 中开放，正式应用更新使用 HTTPS。真机脚本构建并安装测试包，运行全部仪器测试，并在进程外恢复安装授权、字体、密度及旋转设置；撤销安装授权会终止应用，因此不能放在仪器测试内部清理。测试使用独立存储名称与明确创建的 QA 棋局，不清空用户棋局库。测试完成后停止服务。
 
 Windows 下可使用 `scripts/DeviceSnapshot.ps1` 保存实际截图及 UI 层级，使用 `scripts/DeviceTapText.ps1` 根据当前可见文字操作手机。自动测试结果与设备验收详见[执行记录](docs/执行记录.md)。
 

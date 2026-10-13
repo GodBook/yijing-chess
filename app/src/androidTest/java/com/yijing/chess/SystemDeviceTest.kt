@@ -48,13 +48,17 @@ class SystemDeviceTest {
         for (index in 0 until node.childCount) permissionToggle(node.getChild(index))?.let { return it }
         return null
     }
+    private fun hasAppLabel(node: AccessibilityNodeInfo?): Boolean {
+        if (node == null) return false
+        if (node.text?.contains("弈境") == true) return true
+        return (0 until node.childCount).any { hasAppLabel(node.getChild(it)) }
+    }
 
     @Test fun deniedInstallPermissionCanBeRetriedThroughNativeInstaller(): Unit = runBlocking {
-        val previousMode = Regex("REQUEST_INSTALL_PACKAGES: (\\w+)").find(shell("cmd appops get ${context.packageName} REQUEST_INSTALL_PACKAGES"))?.groupValues?.get(1) ?: "default"
         val name = "qa-native-installer-${UUID.randomUUID()}"
         val update = UpdateManager(context, name)
         try {
-            shell("cmd appops set ${context.packageName} REQUEST_INSTALL_PACKAGES deny")
+            assertFalse("Use scripts/RunDeviceTests.ps1 to prepare and restore the native install permission", context.packageManager.canRequestPackageInstalls())
             context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             val meta = JsonParser.parseString(URL("http://127.0.0.1:37123/meta").readText()).asJsonObject
             update.downloadApk(UpdateInfo("v1.3.0", "1.3.0", "QA", "QA", "http://127.0.0.1:37123/fixture.apk", meta["size"].asLong, meta["sha256"].asString))
@@ -78,14 +82,17 @@ class SystemDeviceTest {
             waitFor("returned after granting permission") { automation.rootInActiveWindow?.packageName == context.packageName }
             update.onResume()
             println("Installer state: ${update.status.value}")
-            waitFor("native installer opened: ${update.status.value}") { automation.rootInActiveWindow?.packageName?.toString()?.contains("packageinstaller") == true }
+            waitFor("native installer opened: ${update.status.value}") {
+                val root = automation.rootInActiveWindow
+                root?.packageName?.toString()?.contains("packageinstaller") == true && hasAppLabel(root)
+            }
+            automation.waitForIdle(100, 3000)
             capture("qa-native-installer")
             assertTrue(update.status.value is UpdateStatus.ReadyToInstall)
             shell("input keyevent KEYCODE_BACK")
         } finally {
             update.cancelDownload(); delay(250); update.close()
             context.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()
-            shell("cmd appops set ${context.packageName} REQUEST_INSTALL_PACKAGES $previousMode")
         }
     }
 
