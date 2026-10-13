@@ -10,7 +10,10 @@ import kotlin.random.Random
 
 data class AIDecision(
     val move: MoveRecord?,
-    val score: Int
+    val score: Int,
+    val completedDepth: Int = 0,
+    val searchedNodes: Long = 0,
+    val elapsedMillis: Long = 0
 )
 
 object XiangqiAI {
@@ -45,206 +48,24 @@ object XiangqiAI {
     suspend fun findBestMove(
         board: XiangqiBoard,
         side: PlayerSide,
-        difficulty: Int = 2
+        difficulty: Int = 2,
+        budgetMillis: Long = 2500
     ): AIDecision = withContext(Dispatchers.Default) {
-        val searchBoard = board.copy()
-        val legalMoves = XiangqiRule.getLegalMoves(searchBoard, side)
-        if (legalMoves.isEmpty()) {
-            return@withContext AIDecision(null, if (XiangqiRule.isKingInCheck(searchBoard, side)) -9999 else 0)
-        }
-
-        // 难度设置: 1=入门 (depth 2, 略带随机), 2=进阶 (depth 3, PST位置表), 3=大师 (depth 4, 静态吃子搜索)
-        val searchDepth = when (difficulty) {
-            1 -> 2
-            2 -> 3
-            else -> 4
-        }
-        val useQuiescence = difficulty >= 3
-
-        // 走法排序：优先吃大子，提升 Alpha-Beta 剪枝效率
-        val sortedMoves = legalMoves.sortedByDescending { move ->
-            val captured = searchBoard[move.to]
-            val victimVal = if (captured != null) (PIECE_VALUES[captured.type] ?: 0) * 10 else 0
-            val moverVal = PIECE_VALUES[searchBoard[move.from]?.type] ?: 0
-            victimVal - moverVal / 10
-        }
-
-        var bestMove: MoveRecord = sortedMoves.first()
-        var bestScore = Int.MIN_VALUE + 200
-        val alpha = Int.MIN_VALUE + 200
-        val beta = Int.MAX_VALUE - 200
-
-        val evaluatedCandidates = mutableListOf<Pair<MoveRecord, Int>>()
-
-        for (move in sortedMoves) {
-            currentCoroutineContext().ensureActive()
-
-            val movedPiece = searchBoard[move.from]!!
-            val capturedPiece = searchBoard[move.to]
-
-            searchBoard[move.to] = movedPiece
-            searchBoard[move.from] = null
-            searchBoard.turn = side.xiangqiOpposite
-
-            val score = -alphaBeta(
-                board = searchBoard,
-                currentSide = side.xiangqiOpposite,
-                depth = searchDepth - 1,
-                alpha = -beta,
-                beta = -bestScore,
-                maximizingSide = side,
-                useQuiescence = useQuiescence
-            )
-
-            searchBoard[move.from] = movedPiece
-            searchBoard[move.to] = capturedPiece
-            searchBoard.turn = side
-
-            evaluatedCandidates.add(Pair(move, score))
-
-            if (score > bestScore) {
-                bestScore = score
-                bestMove = move
-            }
-        }
-
-        // 入门难度：在前 3 个候选步中带适度随机，增加对弈趣味
-        if (difficulty == 1 && evaluatedCandidates.size > 1) {
-            evaluatedCandidates.sortByDescending { it.second }
-            val goodPicks = evaluatedCandidates.take(minOf(3, evaluatedCandidates.size))
-            // 80% 选最高分，20% 选次优
-            if (Random.nextFloat() < 0.25f && goodPicks.size > 1) {
-                return@withContext AIDecision(goodPicks[1].first, goodPicks[1].second)
-            }
-        }
-
-        AIDecision(bestMove, bestScore)
+        val result = com.yijing.chess.engine.NegamaxSearch.find(board.copy(), side, difficulty, budgetMillis,
+            object : com.yijing.chess.engine.SearchRules<XiangqiBoard> {
+                override fun moves(board: XiangqiBoard, side: PlayerSide) = XiangqiRule.getLegalMoves(board, side)
+                override fun after(board: XiangqiBoard, move: MoveRecord, side: PlayerSide) = board.copy().also {
+                    it[move.to] = it[move.from]; it[move.from] = null; it.turn = side.xiangqiOpposite
+                }
+                override fun evaluate(board: XiangqiBoard, side: PlayerSide) = XiangqiAI.evaluate(board, side)
+                override fun inCheck(board: XiangqiBoard, side: PlayerSide) = XiangqiRule.isKingInCheck(board, side)
+                override fun opposite(side: PlayerSide) = side.xiangqiOpposite
+                override val stalemateLoses = true
+                override fun priority(board: XiangqiBoard, move: MoveRecord): Int =
+                    (PIECE_VALUES[board[move.to]?.type] ?: 0) * 10 - (PIECE_VALUES[board[move.from]?.type] ?: 0)
+            })
+        AIDecision(result.move, result.score, result.depth, result.nodes, result.elapsedMillis)
     }
-
-    private suspend fun alphaBeta(
-        board: XiangqiBoard,
-        currentSide: PlayerSide,
-        depth: Int,
-        alpha: Int,
-        beta: Int,
-        maximizingSide: PlayerSide,
-        useQuiescence: Boolean
-    ): Int {
-        if (depth <= 0) {
-            return if (useQuiescence) {
-                quiescenceSearch(board, currentSide, alpha, beta, maximizingSide, qDepth = 2)
-            } else {
-                evaluate(board, maximizingSide)
-            }
-        }
-
-        val legalMoves = XiangqiRule.getLegalMoves(board, currentSide)
-        if (legalMoves.isEmpty()) {
-            return if (XiangqiRule.isKingInCheck(board, currentSide)) {
-                if (currentSide == maximizingSide) -9000 - depth else 9000 + depth
-            } else {
-                0
-            }
-        }
-
-        var curAlpha = alpha
-        val sortedMoves = legalMoves.sortedByDescending { move ->
-            val captured = board[move.to]
-            val victimVal = if (captured != null) (PIECE_VALUES[captured.type] ?: 0) * 10 else 0
-            val moverVal = PIECE_VALUES[board[move.from]?.type] ?: 0
-            victimVal - moverVal / 10
-        }
-
-        for (move in sortedMoves) {
-            val movedPiece = board[move.from]!!
-            val capturedPiece = board[move.to]
-
-            board[move.to] = movedPiece
-            board[move.from] = null
-            board.turn = currentSide.xiangqiOpposite
-
-            val score = -alphaBeta(
-                board = board,
-                currentSide = currentSide.xiangqiOpposite,
-                depth = depth - 1,
-                alpha = -beta,
-                beta = -curAlpha,
-                maximizingSide = maximizingSide,
-                useQuiescence = useQuiescence
-            )
-
-            board[move.from] = movedPiece
-            board[move.to] = capturedPiece
-            board.turn = currentSide
-
-            if (score >= beta) {
-                return beta
-            }
-            if (score > curAlpha) {
-                curAlpha = score
-            }
-        }
-
-        return curAlpha
-    }
-
-    /**
-     * 静态吃子延伸搜索 (Quiescence Search)
-     * 彻底解决地平线效应 (防止 AI 为吃一个小兵而丢弃车马炮大子)
-     */
-    private fun quiescenceSearch(
-        board: XiangqiBoard,
-        currentSide: PlayerSide,
-        alpha: Int,
-        beta: Int,
-        maximizingSide: PlayerSide,
-        qDepth: Int
-    ): Int {
-        val standPat = evaluate(board, maximizingSide)
-        if (qDepth <= 0) return standPat
-
-        var curAlpha = alpha
-        if (standPat >= beta) return beta
-        if (standPat > curAlpha) curAlpha = standPat
-
-        val legalMoves = XiangqiRule.getLegalMoves(board, currentSide)
-        // 仅搜索吃子走法
-        val captureMoves = legalMoves.filter { board[it.to] != null }.sortedByDescending { move ->
-            val captured = board[move.to]!!
-            (PIECE_VALUES[captured.type] ?: 0) * 10 - (PIECE_VALUES[board[move.from]?.type] ?: 0)
-        }
-
-        for (move in captureMoves) {
-            val movedPiece = board[move.from]!!
-            val capturedPiece = board[move.to]
-
-            board[move.to] = movedPiece
-            board[move.from] = null
-            board.turn = currentSide.xiangqiOpposite
-
-            val score = -quiescenceSearch(
-                board = board,
-                currentSide = currentSide.xiangqiOpposite,
-                alpha = -beta,
-                beta = -curAlpha,
-                maximizingSide = maximizingSide,
-                qDepth = qDepth - 1
-            )
-
-            board[move.from] = movedPiece
-            board[move.to] = capturedPiece
-            board.turn = currentSide
-
-            if (score >= beta) return beta
-            if (score > curAlpha) curAlpha = score
-        }
-
-        return curAlpha
-    }
-
-    /**
-     * 局面精细评估函数
-     */
     fun evaluate(board: XiangqiBoard, mySide: PlayerSide): Int {
         var myMaterial = 0
         var oppMaterial = 0

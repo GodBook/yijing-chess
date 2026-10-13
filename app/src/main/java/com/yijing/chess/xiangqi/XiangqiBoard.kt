@@ -120,21 +120,22 @@ class XiangqiBoard(
 
         fun fromFen(fen: String): XiangqiBoard {
             val board = XiangqiBoard()
-            val parts = fen.trim().split(" ")
+            val parts = fen.trim().split(Regex("\\s+"))
             val rows = parts[0].split("/")
+            require(rows.size == 10 && parts.size >= 2 && parts[1] in listOf("w", "b")) { "象棋 FEN 应有 10 行及有效轮次" }
             for (y in 0 until minOf(10, rows.size)) {
                 var x = 0
                 for (c in rows[y]) {
-                    if (c.isDigit()) {
+                    if (c in '1'..'9') {
                         x += c.digitToInt()
                     } else {
-                        val piece = XiangqiPiece.fromFenChar(c)
-                        if (piece != null && x in 0..8) {
-                            board[x, y] = piece
-                        }
+                        val piece = requireNotNull(XiangqiPiece.fromFenChar(c)) { "无法识别象棋 FEN 棋子：$c" }
+                        require(x in 0..8) { "象棋 FEN 行宽超过 9 格" }
+                        board[x, y] = piece
                         x++
                     }
                 }
+                require(x == 9) { "象棋 FEN 每行必须恰好 9 格" }
             }
             if (parts.size > 1) {
                 board.turn = if (parts[1].lowercase() == "b") PlayerSide.BLACK else PlayerSide.RED

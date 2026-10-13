@@ -59,6 +59,7 @@ object XiangqiRule {
                     for (cand in pseudo) {
                         // 试探走子
                         val captured = board[cand.to]
+                        if (captured?.type == XiangqiPieceType.KING) continue
                         board[cand.to] = piece
                         board[from] = null
 

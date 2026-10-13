@@ -141,22 +141,27 @@ class ChessBoard(
 
         fun fromFen(fen: String): ChessBoard {
             val board = ChessBoard()
-            val parts = fen.trim().split(" ")
+            val parts = fen.trim().split(Regex("\\s+"))
+            require(parts.size == 6) { "FEN 应包含局面、轮次、易位、过路兵和两个回合计数" }
             val ranks = parts[0].split("/")
+            require(ranks.size == 8) { "国际象棋 FEN 应有 8 行" }
             for (y in 0 until minOf(8, ranks.size)) {
                 var x = 0
                 for (c in ranks[y]) {
-                    if (c.isDigit()) {
+                    if (c in '1'..'8') {
                         x += c.digitToInt()
                     } else {
-                        val piece = ChessPiece.fromFenChar(c)
-                        if (piece != null && x in 0..7) {
-                            board[x, y] = piece
-                        }
+                        val piece = requireNotNull(ChessPiece.fromFenChar(c)) { "无法识别 FEN 棋子：$c" }
+                        require(x in 0..7) { "FEN 行宽超过 8 格" }
+                        board[x, y] = piece
                         x++
                     }
                 }
+                require(x == 8) { "FEN 每行必须恰好 8 格" }
             }
+            require(parts[1] in listOf("w", "b")) { "FEN 行棋方应为 w 或 b" }
+            require(parts[2] == "-" || (parts[2].all { it in "KQkq" } && parts[2].toSet().size == parts[2].length)) { "FEN 易位权无效" }
+            require(parts[3] == "-" || Regex("[a-h][36]").matches(parts[3])) { "FEN 过路兵格无效" }
             if (parts.size > 1) {
                 board.turn = if (parts[1] == "b") PlayerSide.BLACK else PlayerSide.WHITE
             }
@@ -175,6 +180,9 @@ class ChessBoard(
                     board.enPassantTarget = BoardCoordinate(ex, ey)
                 }
             }
+            board.halfMoveClock = requireNotNull(parts[4].toIntOrNull()) { "FEN 半回合计数无效" }
+            board.fullMoveNumber = requireNotNull(parts[5].toIntOrNull()) { "FEN 回合数无效" }
+            require(board.halfMoveClock >= 0 && board.fullMoveNumber >= 1) { "FEN 回合计数超出范围" }
             return board
         }
     }

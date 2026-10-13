@@ -10,7 +10,10 @@ import kotlin.random.Random
 
 data class ChessAIDecision(
     val move: MoveRecord?,
-    val score: Int
+    val score: Int,
+    val completedDepth: Int = 0,
+    val searchedNodes: Long = 0,
+    val elapsedMillis: Long = 0
 )
 
 object ChessAI {
@@ -63,180 +66,28 @@ object ChessAI {
     suspend fun findBestMove(
         board: ChessBoard,
         side: PlayerSide,
-        difficulty: Int = 2
+        difficulty: Int = 2,
+        budgetMillis: Long = 2500
     ): ChessAIDecision = withContext(Dispatchers.Default) {
-        val searchBoard = board.copy()
-        val legalMoves = ChessRule.getLegalMoves(searchBoard, side)
-        if (legalMoves.isEmpty()) {
-            return@withContext ChessAIDecision(null, if (ChessRule.isKingInCheck(searchBoard, side)) -19000 else 0)
+        val result = com.yijing.chess.engine.NegamaxSearch.find(board.copy(), side, difficulty, budgetMillis,
+            object : com.yijing.chess.engine.SearchRules<ChessBoard> {
+                override fun moves(board: ChessBoard, side: PlayerSide) = ChessRule.getLegalMoves(board, side, includeNotation = false)
+                override fun after(board: ChessBoard, move: MoveRecord, side: PlayerSide) = board.copy().also {
+                    ChessRule.applyMove(it, ChessRule.CandidateChessMove(move.from, move.to, move.promotion?.let(ChessPieceType::valueOf)))
+                }
+                override fun evaluate(board: ChessBoard, side: PlayerSide) = ChessAI.evaluate(board, side)
+                override fun inCheck(board: ChessBoard, side: PlayerSide) = ChessRule.isKingInCheck(board, side)
+                override fun priority(board: ChessBoard, move: MoveRecord): Int =
+                    (PIECE_VALUES[board[move.to]?.type] ?: if (move.capturedText != null) 100 else 0) * 10 -
+                        (PIECE_VALUES[board[move.from]?.type] ?: 0) + if (move.promotion != null) 9000 else 0
+            })
+        val canonical = result.move?.let { best ->
+            ChessRule.getLegalMoves(board, side).firstOrNull { it.from == best.from && it.to == best.to && it.promotion == best.promotion }
         }
-
-        val searchDepth = when (difficulty) {
-            1 -> 2
-            2 -> 3
-            else -> 4
-        }
-        val useQuiescence = difficulty >= 3
-
-        val sortedMoves = legalMoves.sortedByDescending { move ->
-            val captured = searchBoard[move.to]
-            val victimVal = if (captured != null) (PIECE_VALUES[captured.type] ?: 0) * 10 else 0
-            val moverVal = PIECE_VALUES[searchBoard[move.from]?.type] ?: 0
-            victimVal - moverVal / 10
-        }
-
-        var bestMove = sortedMoves.first()
-        var bestScore = Int.MIN_VALUE + 200
-        val alpha = Int.MIN_VALUE + 200
-        val beta = Int.MAX_VALUE - 200
-
-        val evaluatedCandidates = mutableListOf<Pair<MoveRecord, Int>>()
-
-        for (move in sortedMoves) {
-            currentCoroutineContext().ensureActive()
-
-            val promoType = move.promotion?.let { runCatching { ChessPieceType.valueOf(it) }.getOrNull() }
-            val cand = ChessRule.CandidateChessMove(move.from, move.to, promoType)
-            val testBoard = searchBoard.copy()
-            ChessRule.applyMove(testBoard, cand)
-
-            val score = -alphaBeta(
-                board = testBoard,
-                currentSide = side.opposite(),
-                depth = searchDepth - 1,
-                alpha = -beta,
-                beta = -bestScore,
-                maximizingSide = side,
-                useQuiescence = useQuiescence
-            )
-
-            evaluatedCandidates.add(Pair(move, score))
-
-            if (score > bestScore) {
-                bestScore = score
-                bestMove = move
-            }
-        }
-
-        if (difficulty == 1 && evaluatedCandidates.size > 1) {
-            evaluatedCandidates.sortByDescending { it.second }
-            val goodPicks = evaluatedCandidates.take(minOf(3, evaluatedCandidates.size))
-            if (Random.nextFloat() < 0.25f && goodPicks.size > 1) {
-                return@withContext ChessAIDecision(goodPicks[1].first, goodPicks[1].second)
-            }
-        }
-
-        ChessAIDecision(bestMove, bestScore)
+        ChessAIDecision(canonical, result.score, result.depth, result.nodes, result.elapsedMillis)
     }
 
-    private suspend fun alphaBeta(
-        board: ChessBoard,
-        currentSide: PlayerSide,
-        depth: Int,
-        alpha: Int,
-        beta: Int,
-        maximizingSide: PlayerSide,
-        useQuiescence: Boolean
-    ): Int {
-        if (depth <= 0) {
-            return if (useQuiescence) {
-                quiescenceSearch(board, currentSide, alpha, beta, maximizingSide, qDepth = 2)
-            } else {
-                evaluate(board, maximizingSide)
-            }
-        }
-
-        val legalMoves = ChessRule.getLegalMoves(board, currentSide)
-        if (legalMoves.isEmpty()) {
-            return if (ChessRule.isKingInCheck(board, currentSide)) {
-                if (currentSide == maximizingSide) -19000 - depth else 19000 + depth
-            } else {
-                0
-            }
-        }
-
-        var curAlpha = alpha
-        val sortedMoves = legalMoves.sortedByDescending { move ->
-            val captured = board[move.to]
-            val victimVal = if (captured != null) (PIECE_VALUES[captured.type] ?: 0) * 10 else 0
-            val moverVal = PIECE_VALUES[board[move.from]?.type] ?: 0
-            victimVal - moverVal / 10
-        }
-
-        for (move in sortedMoves) {
-            val promoType = move.promotion?.let { runCatching { ChessPieceType.valueOf(it) }.getOrNull() }
-            val cand = ChessRule.CandidateChessMove(move.from, move.to, promoType)
-            val testBoard = board.copy()
-            ChessRule.applyMove(testBoard, cand)
-
-            val score = -alphaBeta(
-                board = testBoard,
-                currentSide = currentSide.opposite(),
-                depth = depth - 1,
-                alpha = -beta,
-                beta = -curAlpha,
-                maximizingSide = maximizingSide,
-                useQuiescence = useQuiescence
-            )
-
-            if (score >= beta) {
-                return beta
-            }
-            if (score > curAlpha) {
-                curAlpha = score
-            }
-        }
-
-        return curAlpha
-    }
-
-    /**
-     * 静态吃子延伸搜索 (Quiescence Search)
-     */
-    private fun quiescenceSearch(
-        board: ChessBoard,
-        currentSide: PlayerSide,
-        alpha: Int,
-        beta: Int,
-        maximizingSide: PlayerSide,
-        qDepth: Int
-    ): Int {
-        val standPat = evaluate(board, maximizingSide)
-        if (qDepth <= 0) return standPat
-
-        var curAlpha = alpha
-        if (standPat >= beta) return beta
-        if (standPat > curAlpha) curAlpha = standPat
-
-        val legalMoves = ChessRule.getLegalMoves(board, currentSide)
-        val captureMoves = legalMoves.filter { board[it.to] != null }.sortedByDescending { move ->
-            val victim = board[move.to]!!
-            (PIECE_VALUES[victim.type] ?: 0) * 10 - (PIECE_VALUES[board[move.from]?.type] ?: 0)
-        }
-
-        for (move in captureMoves) {
-            val promoType = move.promotion?.let { runCatching { ChessPieceType.valueOf(it) }.getOrNull() }
-            val cand = ChessRule.CandidateChessMove(move.from, move.to, promoType)
-            val testBoard = board.copy()
-            ChessRule.applyMove(testBoard, cand)
-
-            val score = -quiescenceSearch(
-                board = testBoard,
-                currentSide = currentSide.opposite(),
-                alpha = -beta,
-                beta = -curAlpha,
-                maximizingSide = maximizingSide,
-                qDepth = qDepth - 1
-            )
-
-            if (score >= beta) return beta
-            if (score > curAlpha) curAlpha = score
-        }
-
-        return curAlpha
-    }
-
-    private fun evaluate(board: ChessBoard, mySide: PlayerSide): Int {
+    fun evaluate(board: ChessBoard, mySide: PlayerSide): Int {
         var myMaterial = 0
         var oppMaterial = 0
 
@@ -246,7 +97,7 @@ object ChessAI {
                 var valScore = PIECE_VALUES[piece.type] ?: 0
 
                 val isWhite = piece.side == PlayerSide.WHITE
-                val pstRow = if (isWhite) 7 - y else y
+                val pstRow = if (isWhite) y else 7 - y
 
                 when (piece.type) {
                     ChessPieceType.KNIGHT -> {
