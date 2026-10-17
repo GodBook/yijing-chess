@@ -1,10 +1,10 @@
 # 弈境 YiJing
 
-方寸之间，安心下一盘棋。一个使用 Kotlin 与 Jetpack Compose 开发的 Android 棋类应用，支持中国象棋、围棋和国际象棋，本地对弈、无广告。
+Android 棋类应用，支持中国象棋、围棋和国际象棋，可与电脑对弈、双人同屏或摆谱。使用 Kotlin 与 Jetpack Compose 开发，无广告。
 
-[下载 Release](https://github.com/GodBook/yijing-chess/releases/latest) · [更新说明](docs/releases/v1.3.0.md) · [升级规划](docs/用户体验优化与升级规划.md) · [执行与验收记录](docs/执行记录.md)
+[下载 APK](https://github.com/GodBook/yijing-chess/releases/latest) · [1.3.0 更新说明](docs/releases/v1.3.0.md)
 
-## v1.3.0 的主要功能
+## 主要功能
 
 - 人机、双人同屏和独立摆谱草稿；可选择执子方、AI 难度及每步思考上限。
 - 自动保存完整棋局，大厅一键继续；进程重启后保留轮次、历史、围棋劫点及停着次数。
@@ -13,7 +13,7 @@
 - 国际象棋 PGN／SAN、中国象棋 PGN／ICCS、围棋 SGF 导入导出；FEN 局面输入；系统文件保存与分享。
 - 围棋 9／13／19 路，19 路默认提供落点预览；双停后标记死子，按所选规则与贴目估算并确认结果。
 - 浅色／深色／跟随系统、高对比棋盘、坐标、音效、震动、动效与棋盘无障碍语义。
-- 三道精选入门练习、基本操作及规则说明。
+- 三道入门练习，以及基本操作和规则说明。
 - GitHub 更新检查、系统后台下载、包完整性与签名校验、安装授权引导和分阶段重试。
 
 ## 规则与棋谱范围
@@ -68,7 +68,7 @@ adb reverse --remove tcp:37123
 
 该服务仅用于验证系统 DownloadManager；HTTP 回环访问仅在 Debug 中开放，正式应用更新使用 HTTPS。真机脚本构建并安装测试包，运行全部仪器测试，并在进程外恢复安装授权、字体、密度及旋转设置；撤销安装授权会终止应用，因此不能放在仪器测试内部清理。测试使用独立存储名称与明确创建的 QA 棋局，不清空用户棋局库。测试完成后停止服务。
 
-Windows 下可使用 `scripts/DeviceSnapshot.ps1` 保存实际截图及 UI 层级，使用 `scripts/DeviceTapText.ps1` 根据当前可见文字操作手机。自动测试结果与设备验收详见[执行记录](docs/执行记录.md)。
+Windows 下可使用 `scripts/DeviceSnapshot.ps1` 保存截图及 UI 层级，使用 `scripts/DeviceTapText.ps1` 按可见文字定位操作。设备测试结果见[执行记录](docs/执行记录.md)，后续功能计划见[升级规划](docs/用户体验优化与升级规划.md)。
 
 ## 发布流程
 
